@@ -81,6 +81,7 @@
             const audio = document.getElementById('sender-audio');
             const durationInput = document.getElementById('duration');
             const modeSelect = document.getElementById('record-mode');
+            let localPreviewUrl = null;
 
             function setLoading(isLoading) {
                 browserBtn.disabled = isLoading;
@@ -94,9 +95,13 @@
                 status.className = 'status ' + kind;
             }
 
-            function setPreview(url) {
+            function setPreview(url, cacheBust) {
                 if (audio && url) {
-                    audio.src = url + '?t=' + Date.now();
+                    if (cacheBust) {
+                        audio.src = url + '?t=' + Date.now();
+                    } else {
+                        audio.src = url;
+                    }
                     preview.classList.remove('hidden');
                 }
             }
@@ -147,41 +152,57 @@
                 if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
                     throw new Error('Browser recording is not supported here.');
                 }
+                if (!window.MediaRecorder) {
+                    throw new Error('MediaRecorder is not available in this browser.');
+                }
 
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                const AudioContextRef = window.AudioContext || window.webkitAudioContext;
-                const audioCtx = new AudioContextRef();
-                const source = audioCtx.createMediaStreamSource(stream);
-                const processor = audioCtx.createScriptProcessor(4096, 1, 1);
                 const chunks = [];
+                const recorder = new MediaRecorder(stream);
 
-                processor.onaudioprocess = function (event) {
-                    const input = event.inputBuffer.getChannelData(0);
-                    chunks.push(new Float32Array(input));
+                recorder.ondataavailable = function (event) {
+                    if (event.data && event.data.size > 0) {
+                        chunks.push(event.data);
+                    }
                 };
 
-                source.connect(processor);
-                processor.connect(audioCtx.destination);
+                recorder.start();
 
                 await new Promise(function (resolve) {
                     setTimeout(resolve, duration * 1000);
                 });
 
-                processor.disconnect();
-                source.disconnect();
+                await new Promise(function (resolve) {
+                    recorder.onstop = resolve;
+                    recorder.stop();
+                });
                 stream.getTracks().forEach(function (track) { track.stop(); });
+
+                if (!chunks.length) {
+                    throw new Error('No audio captured from microphone.');
+                }
+
+                const compressedBlob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+                const arrayBuffer = await compressedBlob.arrayBuffer();
+                const AudioContextRef = window.AudioContext || window.webkitAudioContext;
+                const audioCtx = new AudioContextRef();
+                const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
                 await audioCtx.close();
 
-                let totalLen = 0;
-                chunks.forEach(function (c) { totalLen += c.length; });
-                const merged = new Float32Array(totalLen);
-                let pos = 0;
-                chunks.forEach(function (c) {
-                    merged.set(c, pos);
-                    pos += c.length;
-                });
+                const frameCount = audioBuffer.length;
+                const mono = new Float32Array(frameCount);
+                for (let channel = 0; channel < audioBuffer.numberOfChannels; channel += 1) {
+                    const channelData = audioBuffer.getChannelData(channel);
+                    for (let i = 0; i < frameCount; i += 1) {
+                        mono[i] += channelData[i];
+                    }
+                }
+                const norm = 1 / Math.max(1, audioBuffer.numberOfChannels);
+                for (let i = 0; i < frameCount; i += 1) {
+                    mono[i] *= norm;
+                }
 
-                return encodeWavFromFloat(merged, audioCtx.sampleRate || 44100);
+                return encodeWavFromFloat(mono, audioBuffer.sampleRate || 44100);
             }
 
             async function uploadBrowserWav(blob) {
@@ -222,12 +243,23 @@
                     let data;
                     if (mode === 'server') {
                         data = await recordOnServer(duration);
+                        if (localPreviewUrl) {
+                            URL.revokeObjectURL(localPreviewUrl);
+                            localPreviewUrl = null;
+                        }
+                        setPreview(data.audio_url, true);
                     } else {
                         const wavBlob = await recordInBrowser(duration);
+                        if (localPreviewUrl) {
+                            URL.revokeObjectURL(localPreviewUrl);
+                        }
+                        localPreviewUrl = URL.createObjectURL(wavBlob);
+                        // Preview directly from the captured local blob to avoid serverless file volatility.
+                        setPreview(localPreviewUrl, false);
                         data = await uploadBrowserWav(wavBlob);
+                        // Keep server URL in status flow for backend use, but retain local audio preview.
                     }
                     setStatus('success', data.message || 'Recording complete.');
-                    setPreview(data.audio_url);
                 } catch (err) {
                     setStatus('error', err.message || String(err));
                 } finally {
