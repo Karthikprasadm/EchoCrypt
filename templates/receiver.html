@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Receiver - EchoCrypt</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+    <main class="page">
+        <nav class="topnav">
+            <a href="{{ url_for('index') }}">&larr; Home</a>
+            <a href="{{ url_for('sender_page') }}">Sender &rarr;</a>
+        </nav>
+
+        <section class="card">
+            <h1>Receiver</h1>
+            <p class="subtitle">Authenticate &middot; Extract &middot; Decrypt</p>
+
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    <div class="flashes">
+                        {% for category, msg in messages %}
+                            <div class="flash {{ category }}">{{ msg }}</div>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+            {% endwith %}
+
+            <form action="{{ url_for('upload_decrypt_route') }}"
+                  method="post" enctype="multipart/form-data" class="stack">
+
+                <label for="audio">Encoded audio file (.wav)</label>
+                <input id="audio" name="audio" type="file" accept=".wav,audio/wav" required />
+
+                <label for="password">Fingerprint password</label>
+                <input id="password" name="password" type="password"
+                       placeholder="Enter fingerprint code" required />
+
+                <button type="submit" class="btn primary">Decrypt Message</button>
+            </form>
+
+            {% if access_denied %}
+                <div class="result denied">
+                    <h2>Access Denied</h2>
+                    <p>Fingerprint authentication failed.</p>
+                </div>
+            {% elif success %}
+                <div class="result success">
+                    <h2>Message Decrypted</h2>
+                    <p class="muted">Original secret:</p>
+                    <pre class="message-box">{{ message }}</pre>
+                </div>
+            {% elif error %}
+                <div class="result error">
+                    <h2>Could not decrypt</h2>
+                    <p>{{ error }}</p>
+                </div>
+            {% endif %}
+        </section>
+    </main>
+</body>
+</html>

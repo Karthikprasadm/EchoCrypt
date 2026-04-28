@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>EchoCrypt - Secure Voice Communication</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+    <main class="page">
+        <section class="card hero">
+            <h1>EchoCrypt</h1>
+            <p class="subtitle">
+                Secure Voice Communication with Audio Steganography
+                and Fingerprint Authentication
+            </p>
+
+            <p class="lead">
+                Hide AES-encrypted messages inside short voice recordings.
+                The receiver authenticates with a simulated fingerprint
+                before extracting and decrypting the secret.
+            </p>
+
+            <div class="actions">
+                <a class="btn primary" href="{{ url_for('sender_page') }}">Go to Sender</a>
+                <a class="btn ghost" href="{{ url_for('receiver_page') }}">Go to Receiver</a>
+            </div>
+        </section>
+
+        <section class="card info">
+            <h2>How it works</h2>
+            <ol class="steps">
+                <li><strong>Record</strong> a short voice clip on the sender page.</li>
+                <li><strong>Encrypt</strong> your secret message with AES-EAX.</li>
+                <li><strong>Embed</strong> the ciphertext into the audio's least significant bits.</li>
+                <li><strong>Send</strong> the encoded WAV to the receiver.</li>
+                <li><strong>Authenticate</strong> with the demo fingerprint password.</li>
+                <li><strong>Extract &amp; decrypt</strong> the original message.</li>
+            </ol>
+        </section>
+    </main>
+</body>
+</html>

@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sender - EchoCrypt</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+    <main class="page">
+        <nav class="topnav">
+            <a href="{{ url_for('index') }}">&larr; Home</a>
+            <a href="{{ url_for('receiver_page') }}">Receiver &rarr;</a>
+        </nav>
+
+        <section class="card">
+            <h1>Sender</h1>
+            <p class="subtitle">Record &middot; Encrypt &middot; Embed</p>
+
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    <div class="flashes">
+                        {% for category, msg in messages %}
+                            <div class="flash {{ category }}">{{ msg }}</div>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+            {% endwith %}
+
+            <div class="step">
+                <h2>1. Record voice</h2>
+                <div class="row">
+                    <label for="duration">Duration (seconds)</label>
+                    <input id="duration" type="number" min="1" max="10" value="3" />
+                    <button id="record-btn" class="btn primary" type="button">
+                        Record
+                    </button>
+                </div>
+                <p id="record-status" class="status" role="status" aria-live="polite"></p>
+                <div id="record-preview" class="preview {% if not sender_exists %}hidden{% endif %}">
+                    <p class="muted">Recorded sender.wav:</p>
+                    <audio id="sender-audio" controls
+                           src="{{ sender_url or '' }}"></audio>
+                </div>
+            </div>
+
+            <div class="step">
+                <h2>2. Encrypt &amp; embed secret</h2>
+                <form action="{{ url_for('encrypt_embed_route') }}" method="post" class="stack">
+                    <label for="message">Secret message</label>
+                    <textarea id="message" name="message" rows="3"
+                              placeholder="Type the secret to hide inside the recording..."
+                              required></textarea>
+                    <button type="submit" class="btn primary">Encrypt and Embed</button>
+                </form>
+            </div>
+
+            {% if encoded_exists %}
+            <div class="step success-step">
+                <h2>3. Encoded audio</h2>
+                <p class="muted">encoded.wav is ready - send this file to the receiver.</p>
+                <audio controls src="{{ encoded_url }}"></audio>
+                <div class="actions">
+                    <a class="btn primary" href="{{ encoded_url }}" download>Download encoded.wav</a>
+                </div>
+            </div>
+            {% endif %}
+        </section>
+    </main>
+
+    <script>
+        (function () {
+            const btn = document.getElementById('record-btn');
+            const status = document.getElementById('record-status');
+            const preview = document.getElementById('record-preview');
+            const audio = document.getElementById('sender-audio');
+            const durationInput = document.getElementById('duration');
+
+            btn.addEventListener('click', async function () {
+                const duration = Math.max(1, Math.min(10, parseInt(durationInput.value || '3', 10)));
+                btn.disabled = true;
+                status.textContent = 'Recording for ' + duration + 's...';
+                status.className = 'status info';
+
+                try {
+                    const form = new FormData();
+                    form.append('duration', String(duration));
+                    const res = await fetch('{{ url_for("record_route") }}', {
+                        method: 'POST',
+                        body: form,
+                    });
+                    const data = await res.json();
+                    if (!res.ok || !data.ok) {
+                        throw new Error(data.error || 'Recording failed.');
+                    }
+                    status.textContent = data.message || 'Recording complete.';
+                    status.className = 'status success';
+                    if (audio && data.audio_url) {
+                        audio.src = data.audio_url + '?t=' + Date.now();
+                        preview.classList.remove('hidden');
+                    }
+                } catch (err) {
+                    status.textContent = err.message || String(err);
+                    status.className = 'status error';
+                } finally {
+                    btn.disabled = false;
+                }
+            });
+        })();
+    </script>
+</body>
+</html>
