@@ -161,6 +161,7 @@ input[type="text"],
 input[type="password"],
 input[type="number"],
 input[type="file"],
+select,
 textarea {
     background: rgba(8, 12, 24, 0.55);
     color: var(--text);

@@ -103,6 +103,47 @@ def record_route():
     )
 
 
+@app.route("/upload_sender_audio", methods=["POST"])
+def upload_sender_audio_route():
+    """Accept browser-recorded WAV and store it as sender.wav.
+
+    This route is intended for serverless hosting (e.g. Vercel) where
+    server-side microphone capture via sounddevice is unavailable.
+    """
+    upload = request.files.get("audio")
+    if upload is None or upload.filename == "":
+        return jsonify({"ok": False, "error": "No audio file uploaded."}), 400
+
+    safe_name = secure_filename(upload.filename) or "recorded.wav"
+    ext = os.path.splitext(safe_name)[1].lower()
+    if ext and ext not in ALLOWED_UPLOAD_EXTS:
+        return jsonify({"ok": False, "error": "Please upload a .wav file."}), 400
+
+    target = _uploads_path(SENDER_WAV)
+    try:
+        upload.save(target)
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"ok": False, "error": f"Could not save audio: {exc}"}), 500
+
+    # Validate that the saved file is a readable WAV for the stego pipeline.
+    try:
+        audio_utils.load_audio(str(target))
+    except ValueError as exc:
+        try:
+            target.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return jsonify({"ok": False, "error": f"Invalid WAV data: {exc}"}), 400
+
+    return jsonify(
+        {
+            "ok": True,
+            "message": "Browser recording uploaded as sender.wav.",
+            "audio_url": url_for("download", filename=SENDER_WAV),
+        }
+    )
+
+
 @app.route("/encrypt_embed", methods=["POST"])
 def encrypt_embed_route():
     """Encrypt the secret and embed it inside sender.wav, producing encoded.wav."""

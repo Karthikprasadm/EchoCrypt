@@ -30,11 +30,15 @@
             <div class="step">
                 <h2>1. Record voice</h2>
                 <div class="row">
+                    <label for="record-mode">Mode</label>
+                    <select id="record-mode">
+                        <option value="browser" selected>Browser (Vercel-friendly)</option>
+                        <option value="server">Server microphone (local only)</option>
+                    </select>
                     <label for="duration">Duration (seconds)</label>
                     <input id="duration" type="number" min="1" max="10" value="3" />
-                    <button id="record-btn" class="btn primary" type="button">
-                        Record
-                    </button>
+                    <button id="record-browser-btn" class="btn primary" type="button">Record in Browser</button>
+                    <button id="record-server-btn" class="btn ghost" type="button">Record on Server</button>
                 </div>
                 <p id="record-status" class="status" role="status" aria-live="polite"></p>
                 <div id="record-preview" class="preview {% if not sender_exists %}hidden{% endif %}">
@@ -70,41 +74,175 @@
 
     <script>
         (function () {
-            const btn = document.getElementById('record-btn');
+            const browserBtn = document.getElementById('record-browser-btn');
+            const serverBtn = document.getElementById('record-server-btn');
             const status = document.getElementById('record-status');
             const preview = document.getElementById('record-preview');
             const audio = document.getElementById('sender-audio');
             const durationInput = document.getElementById('duration');
+            const modeSelect = document.getElementById('record-mode');
 
-            btn.addEventListener('click', async function () {
+            function setLoading(isLoading) {
+                browserBtn.disabled = isLoading;
+                serverBtn.disabled = isLoading;
+                durationInput.disabled = isLoading;
+                modeSelect.disabled = isLoading;
+            }
+
+            function setStatus(kind, message) {
+                status.textContent = message;
+                status.className = 'status ' + kind;
+            }
+
+            function setPreview(url) {
+                if (audio && url) {
+                    audio.src = url + '?t=' + Date.now();
+                    preview.classList.remove('hidden');
+                }
+            }
+
+            function floatTo16BitPCM(float32Array) {
+                const out = new Int16Array(float32Array.length);
+                for (let i = 0; i < float32Array.length; i += 1) {
+                    const s = Math.max(-1, Math.min(1, float32Array[i]));
+                    out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+                }
+                return out;
+            }
+
+            function writeString(view, offset, str) {
+                for (let i = 0; i < str.length; i += 1) {
+                    view.setUint8(offset + i, str.charCodeAt(i));
+                }
+            }
+
+            function encodeWavFromFloat(float32Array, sampleRate) {
+                const pcm = floatTo16BitPCM(float32Array);
+                const buffer = new ArrayBuffer(44 + pcm.length * 2);
+                const view = new DataView(buffer);
+
+                writeString(view, 0, 'RIFF');
+                view.setUint32(4, 36 + pcm.length * 2, true);
+                writeString(view, 8, 'WAVE');
+                writeString(view, 12, 'fmt ');
+                view.setUint32(16, 16, true);
+                view.setUint16(20, 1, true); // PCM
+                view.setUint16(22, 1, true); // mono
+                view.setUint32(24, sampleRate, true);
+                view.setUint32(28, sampleRate * 2, true); // sampleRate * channels * bytesPerSample
+                view.setUint16(32, 2, true); // blockAlign
+                view.setUint16(34, 16, true); // bitsPerSample
+                writeString(view, 36, 'data');
+                view.setUint32(40, pcm.length * 2, true);
+
+                let offset = 44;
+                for (let i = 0; i < pcm.length; i += 1) {
+                    view.setInt16(offset, pcm[i], true);
+                    offset += 2;
+                }
+                return new Blob([view], { type: 'audio/wav' });
+            }
+
+            async function recordInBrowser(duration) {
+                if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                    throw new Error('Browser recording is not supported here.');
+                }
+
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                const AudioContextRef = window.AudioContext || window.webkitAudioContext;
+                const audioCtx = new AudioContextRef();
+                const source = audioCtx.createMediaStreamSource(stream);
+                const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+                const chunks = [];
+
+                processor.onaudioprocess = function (event) {
+                    const input = event.inputBuffer.getChannelData(0);
+                    chunks.push(new Float32Array(input));
+                };
+
+                source.connect(processor);
+                processor.connect(audioCtx.destination);
+
+                await new Promise(function (resolve) {
+                    setTimeout(resolve, duration * 1000);
+                });
+
+                processor.disconnect();
+                source.disconnect();
+                stream.getTracks().forEach(function (track) { track.stop(); });
+                await audioCtx.close();
+
+                let totalLen = 0;
+                chunks.forEach(function (c) { totalLen += c.length; });
+                const merged = new Float32Array(totalLen);
+                let pos = 0;
+                chunks.forEach(function (c) {
+                    merged.set(c, pos);
+                    pos += c.length;
+                });
+
+                return encodeWavFromFloat(merged, audioCtx.sampleRate || 44100);
+            }
+
+            async function uploadBrowserWav(blob) {
+                const form = new FormData();
+                form.append('audio', new File([blob], 'sender.wav', { type: 'audio/wav' }));
+                const res = await fetch('{{ url_for("upload_sender_audio_route") }}', {
+                    method: 'POST',
+                    body: form,
+                });
+                const data = await res.json();
+                if (!res.ok || !data.ok) {
+                    throw new Error(data.error || 'Browser upload failed.');
+                }
+                return data;
+            }
+
+            async function recordOnServer(duration) {
+                const form = new FormData();
+                form.append('duration', String(duration));
+                const res = await fetch('{{ url_for("record_route") }}', {
+                    method: 'POST',
+                    body: form,
+                });
+                const data = await res.json();
+                if (!res.ok || !data.ok) {
+                    throw new Error(data.error || 'Server recording failed.');
+                }
+                return data;
+            }
+
+            async function handleRecord() {
                 const duration = Math.max(1, Math.min(10, parseInt(durationInput.value || '3', 10)));
-                btn.disabled = true;
-                status.textContent = 'Recording for ' + duration + 's...';
-                status.className = 'status info';
+                const mode = modeSelect.value;
+                setLoading(true);
+                setStatus('info', 'Recording for ' + duration + 's using ' + mode + ' mode...');
 
                 try {
-                    const form = new FormData();
-                    form.append('duration', String(duration));
-                    const res = await fetch('{{ url_for("record_route") }}', {
-                        method: 'POST',
-                        body: form,
-                    });
-                    const data = await res.json();
-                    if (!res.ok || !data.ok) {
-                        throw new Error(data.error || 'Recording failed.');
+                    let data;
+                    if (mode === 'server') {
+                        data = await recordOnServer(duration);
+                    } else {
+                        const wavBlob = await recordInBrowser(duration);
+                        data = await uploadBrowserWav(wavBlob);
                     }
-                    status.textContent = data.message || 'Recording complete.';
-                    status.className = 'status success';
-                    if (audio && data.audio_url) {
-                        audio.src = data.audio_url + '?t=' + Date.now();
-                        preview.classList.remove('hidden');
-                    }
+                    setStatus('success', data.message || 'Recording complete.');
+                    setPreview(data.audio_url);
                 } catch (err) {
-                    status.textContent = err.message || String(err);
-                    status.className = 'status error';
+                    setStatus('error', err.message || String(err));
                 } finally {
-                    btn.disabled = false;
+                    setLoading(false);
                 }
+            }
+
+            browserBtn.addEventListener('click', async function () {
+                modeSelect.value = 'browser';
+                await handleRecord();
+            });
+
+            serverBtn.addEventListener('click', async function () {
+                modeSelect.value = 'server';
+                await handleRecord();
             });
         })();
     </script>
