@@ -31,7 +31,20 @@ import stego
 
 
 BASE_DIR = Path(__file__).resolve().parent
-UPLOADS_DIR = BASE_DIR / "uploads"
+
+
+def _resolve_upload_dir() -> Path:
+    """Pick a writable storage path for generated audio files.
+
+    - Local development: use project ./uploads
+    - Vercel serverless: use /tmp (runtime-writable)
+    """
+    if os.environ.get("VERCEL"):
+        return Path("/tmp/echocrypt_uploads")
+    return BASE_DIR / "uploads"
+
+
+UPLOADS_DIR = _resolve_upload_dir()
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 SENDER_WAV = "sender.wav"
