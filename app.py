@@ -96,10 +96,17 @@ def record_route():
 
     target = _uploads_path(SENDER_WAV)
     try:
+        device_raw = (request.form.get("device_id") or "").strip()
+        device_id = int(device_raw) if device_raw else None
+    except ValueError:
+        return jsonify({"ok": False, "error": "Invalid server microphone selection."}), 400
+
+    try:
         audio_utils.record_audio(
             filename=str(target),
             duration=duration,
             fs=audio_utils.DEFAULT_SAMPLE_RATE,
+            device=device_id,
         )
     except RuntimeError as exc:
         return (
@@ -114,6 +121,60 @@ def record_route():
             "audio_url": url_for("download", filename=SENDER_WAV),
         }
     )
+
+
+@app.route("/audio_devices", methods=["GET"])
+def audio_devices_route():
+    """Expose server-side input devices for local microphone selection."""
+    return jsonify({"ok": True, "devices": audio_utils.list_input_devices()})
+
+
+@app.route("/test_mic", methods=["POST"])
+def test_mic_route():
+    """Test selected microphone input and report signal presence."""
+    mode = (request.form.get("mode") or "").strip().lower()
+
+    if mode == "server":
+        try:
+            device_raw = (request.form.get("device_id") or "").strip()
+            device_id = int(device_raw) if device_raw else None
+        except ValueError:
+            return jsonify({"ok": False, "error": "Invalid server microphone selection."}), 400
+
+        try:
+            result = audio_utils.test_input_device(
+                duration=1.5,
+                fs=audio_utils.DEFAULT_SAMPLE_RATE,
+                device=device_id,
+            )
+        except RuntimeError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 500
+
+        if not result["ok"]:
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error": (
+                            "Selected server mic has very low/no signal. "
+                            f"(peak={result['peak']:.4f}, rms={result['rms']:.4f})"
+                        ),
+                    }
+                ),
+                400,
+            )
+
+        return jsonify(
+            {
+                "ok": True,
+                "message": (
+                    "Server microphone test passed "
+                    f"(peak={result['peak']:.4f}, rms={result['rms']:.4f})."
+                ),
+            }
+        )
+
+    return jsonify({"ok": False, "error": "Unsupported test mode."}), 400
 
 
 @app.route("/upload_sender_audio", methods=["POST"])

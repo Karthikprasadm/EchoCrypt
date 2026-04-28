@@ -146,6 +146,39 @@ h2 { font-size: 17px; margin: 0 0 12px; }
     flex-wrap: wrap;
 }
 
+.record-panel {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 14px;
+    padding: 16px;
+    border-radius: 14px;
+    border: 1px solid rgba(168, 186, 230, 0.14);
+    background: rgba(255, 255, 255, 0.01);
+}
+
+.field-wide {
+    width: 100%;
+}
+
+.duration-field {
+    max-width: 210px;
+}
+
+.duration-field input[type="number"] {
+    width: 100%;
+}
+
+.record-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+}
+
+.record-actions .btn {
+    min-height: 42px;
+}
+
 .stack {
     display: flex;
     flex-direction: column;
@@ -272,4 +305,14 @@ textarea { resize: vertical; }
     .hero h1 { font-size: 32px; }
     .actions { flex-direction: column; }
     .actions .btn { width: 100%; }
+    .record-actions {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .record-actions .btn {
+        width: 100%;
+    }
+    .duration-field {
+        max-width: 100%;
+    }
 }

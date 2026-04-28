@@ -29,22 +29,41 @@
 
             <div class="step">
                 <h2>1. Record voice</h2>
-                <div class="row">
-                    <label for="record-mode">Mode</label>
-                    <select id="record-mode">
-                        <option value="browser" selected>Browser (Vercel-friendly)</option>
-                        <option value="server">Server microphone (local only)</option>
-                    </select>
-                    <label for="duration">Duration (seconds)</label>
-                    <input id="duration" type="number" min="1" max="10" value="3" />
-                    <button id="record-browser-btn" class="btn primary" type="button">Record in Browser</button>
-                    <button id="record-server-btn" class="btn ghost" type="button">Record on Server</button>
+                <div class="record-panel">
+                    <div class="stack field-wide">
+                        <label for="record-mode">Mode</label>
+                        <select id="record-mode">
+                            <option value="browser" selected>Browser (Vercel-friendly)</option>
+                            <option value="server">Server microphone (local only)</option>
+                        </select>
+                    </div>
+                    <div id="browser-mic-field" class="stack mic-field field-wide">
+                        <label for="browser-mic">Browser mic</label>
+                        <select id="browser-mic">
+                            <option value="">Detecting browser microphones...</option>
+                        </select>
+                    </div>
+                    <div id="server-mic-field" class="stack mic-field field-wide">
+                        <label for="server-mic">Server mic</label>
+                        <select id="server-mic">
+                            <option value="">Detecting server microphones...</option>
+                        </select>
+                    </div>
+                    <div class="stack duration-field">
+                        <label for="duration">Duration (seconds)</label>
+                        <input id="duration" type="number" min="1" max="10" value="3" />
+                    </div>
+                    <div class="record-actions">
+                        <button id="record-browser-btn" class="btn primary" type="button">Record in Browser</button>
+                        <button id="record-server-btn" class="btn ghost" type="button">Record on Server</button>
+                        <button id="test-mic-btn" class="btn ghost" type="button">Test Selected Mic</button>
+                    </div>
                 </div>
                 <p id="record-status" class="status" role="status" aria-live="polite"></p>
-                <div id="record-preview" class="preview {% if not sender_exists %}hidden{% endif %}">
+                <div id="record-preview" class="preview hidden">
                     <p class="muted">Recorded sender.wav:</p>
                     <audio id="sender-audio" controls
-                           src="{{ sender_url or '' }}"></audio>
+                           src=""></audio>
                 </div>
             </div>
 
@@ -81,18 +100,97 @@
             const audio = document.getElementById('sender-audio');
             const durationInput = document.getElementById('duration');
             const modeSelect = document.getElementById('record-mode');
+            const testMicBtn = document.getElementById('test-mic-btn');
+            const browserMicSelect = document.getElementById('browser-mic');
+            const serverMicSelect = document.getElementById('server-mic');
+            const browserMicField = document.getElementById('browser-mic-field');
+            const serverMicField = document.getElementById('server-mic-field');
             let localPreviewUrl = null;
+            let countdownTimerId = null;
+            let lastPassedTest = null;
 
             function setLoading(isLoading) {
                 browserBtn.disabled = isLoading;
                 serverBtn.disabled = isLoading;
                 durationInput.disabled = isLoading;
                 modeSelect.disabled = isLoading;
+                testMicBtn.disabled = isLoading;
+                browserMicSelect.disabled = isLoading;
+                serverMicSelect.disabled = isLoading;
             }
 
             function setStatus(kind, message) {
                 status.textContent = message;
                 status.className = 'status ' + kind;
+            }
+
+            function currentMicKey() {
+                const mode = modeSelect.value;
+                const device = mode === 'server' ? serverMicSelect.value : browserMicSelect.value;
+                return mode + '::' + (device || 'default');
+            }
+
+            function invalidateMicTest(showHint) {
+                lastPassedTest = null;
+                if (showHint) {
+                    setStatus('info', 'Microphone selection changed. Please click "Test Selected Mic" before recording.');
+                }
+            }
+
+            function syncModeDependentMicUI() {
+                const isServer = modeSelect.value === 'server';
+                browserMicField.classList.toggle('hidden', isServer);
+                serverMicField.classList.toggle('hidden', !isServer);
+                browserMicSelect.disabled = isServer;
+                serverMicSelect.disabled = !isServer;
+            }
+
+            function isLikelyVirtualOrAlias(name) {
+                const lowered = String(name || '').toLowerCase();
+                const blocked = [
+                    'default',
+                    'communications',
+                    'mapper',
+                    'steam streaming',
+                    'virtual',
+                    'cable input',
+                    'primary sound capture driver',
+                ];
+                return blocked.some(function (token) { return lowered.includes(token); });
+            }
+
+            function cleanBrowserMicLabel(label, fallbackIndex) {
+                const raw = String(label || '').trim();
+                if (!raw) {
+                    return 'Browser microphone ' + (fallbackIndex + 1);
+                }
+                // Convert "Default - Microphone (X)" to "Microphone (X)".
+                if (raw.toLowerCase().startsWith('default - ')) {
+                    return raw.slice('default - '.length).trim();
+                }
+                return raw;
+            }
+
+            function clearCountdown() {
+                if (countdownTimerId) {
+                    clearInterval(countdownTimerId);
+                    countdownTimerId = null;
+                }
+            }
+
+            function startCountdown(duration, mode) {
+                clearCountdown();
+                let remaining = duration;
+                setStatus('info', 'Recording in ' + mode + ' mode... ' + remaining + 's remaining');
+                countdownTimerId = setInterval(function () {
+                    remaining -= 1;
+                    if (remaining <= 0) {
+                        clearCountdown();
+                        setStatus('info', 'Finishing recording...');
+                        return;
+                    }
+                    setStatus('info', 'Recording in ' + mode + ' mode... ' + remaining + 's remaining');
+                }, 1000);
             }
 
             function setPreview(url, cacheBust) {
@@ -111,6 +209,41 @@
                 for (let i = 0; i < float32Array.length; i += 1) {
                     const s = Math.max(-1, Math.min(1, float32Array[i]));
                     out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+                }
+                return out;
+            }
+
+            function analyzeSignal(samples) {
+                let peak = 0;
+                let sumSquares = 0;
+                for (let i = 0; i < samples.length; i += 1) {
+                    const v = Math.abs(samples[i]);
+                    if (v > peak) {
+                        peak = v;
+                    }
+                    sumSquares += samples[i] * samples[i];
+                }
+                const rms = Math.sqrt(sumSquares / Math.max(1, samples.length));
+                return { peak: peak, rms: rms };
+            }
+
+            function normalizeSignal(samples) {
+                const info = analyzeSignal(samples);
+                if (info.peak < 0.0025 || info.rms < 0.0008) {
+                    throw new Error(
+                        'No microphone signal detected. Check mic permission, input device, and system mute.'
+                    );
+                }
+                const maxGain = 8.0;
+                const targetPeak = 0.9;
+                const gain = Math.min(maxGain, targetPeak / info.peak);
+                if (gain <= 1.02) {
+                    return samples;
+                }
+                const out = new Float32Array(samples.length);
+                for (let i = 0; i < samples.length; i += 1) {
+                    const scaled = samples[i] * gain;
+                    out[i] = Math.max(-1, Math.min(1, scaled));
                 }
                 return out;
             }
@@ -148,6 +281,84 @@
                 return new Blob([view], { type: 'audio/wav' });
             }
 
+            async function loadBrowserDevices() {
+                if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+                    browserMicSelect.innerHTML = '';
+                    const opt = document.createElement('option');
+                    opt.value = '';
+                    opt.textContent = 'Browser device listing not supported';
+                    browserMicSelect.appendChild(opt);
+                    return;
+                }
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const mics = devices.filter(function (d) { return d.kind === 'audioinput'; });
+                const filteredMics = mics.filter(function (d) {
+                    return !isLikelyVirtualOrAlias(d.label);
+                });
+                const visibleMics = filteredMics.length ? filteredMics : mics;
+                const prev = browserMicSelect.value;
+                browserMicSelect.innerHTML = '';
+                if (!visibleMics.length) {
+                    const none = document.createElement('option');
+                    none.value = '';
+                    none.textContent = 'No browser microphone detected';
+                    browserMicSelect.appendChild(none);
+                    return;
+                }
+                visibleMics.forEach(function (d, idx) {
+                    const opt = document.createElement('option');
+                    opt.value = d.deviceId;
+                    opt.textContent = cleanBrowserMicLabel(d.label, idx);
+                    browserMicSelect.appendChild(opt);
+                });
+                if (prev && visibleMics.some(function (d) { return d.deviceId === prev; })) {
+                    browserMicSelect.value = prev;
+                } else {
+                    browserMicSelect.selectedIndex = 0;
+                }
+            }
+
+            async function loadServerDevices() {
+                try {
+                    const res = await fetch('{{ url_for("audio_devices_route") }}');
+                    const data = await res.json();
+                    if (!res.ok || !data.ok || !Array.isArray(data.devices)) {
+                        serverMicSelect.innerHTML = '';
+                        const bad = document.createElement('option');
+                        bad.value = '';
+                        bad.textContent = 'Could not load server microphones';
+                        serverMicSelect.appendChild(bad);
+                        return;
+                    }
+                    const prev = serverMicSelect.value;
+                    serverMicSelect.innerHTML = '';
+                    if (!data.devices.length) {
+                        const none = document.createElement('option');
+                        none.value = '';
+                        none.textContent = 'No server microphone detected';
+                        serverMicSelect.appendChild(none);
+                        return;
+                    }
+                    data.devices.forEach(function (d) {
+                        const opt = document.createElement('option');
+                        opt.value = String(d.id);
+                        opt.textContent = d.name || ('Server microphone ' + d.id);
+                        serverMicSelect.appendChild(opt);
+                    });
+                    if (prev && data.devices.some(function (d) { return String(d.id) === prev; })) {
+                        serverMicSelect.value = prev;
+                    } else {
+                        serverMicSelect.selectedIndex = 0;
+                    }
+                } catch (_err) {
+                    serverMicSelect.innerHTML = '';
+                    const err = document.createElement('option');
+                    err.value = '';
+                    err.textContent = 'Server mic detection failed';
+                    serverMicSelect.appendChild(err);
+                }
+            }
+
             async function recordInBrowser(duration) {
                 if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
                     throw new Error('Browser recording is not supported here.');
@@ -155,8 +366,18 @@
                 if (!window.MediaRecorder) {
                     throw new Error('MediaRecorder is not available in this browser.');
                 }
+                const selectedBrowserMic = browserMicSelect.value;
 
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        deviceId: selectedBrowserMic ? { exact: selectedBrowserMic } : undefined,
+                        channelCount: 1,
+                        sampleRate: 44100,
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true,
+                    },
+                });
                 const chunks = [];
                 const recorder = new MediaRecorder(stream);
 
@@ -201,20 +422,125 @@
                 for (let i = 0; i < frameCount; i += 1) {
                     mono[i] *= norm;
                 }
+                const normalized = normalizeSignal(mono);
 
-                return encodeWavFromFloat(mono, audioBuffer.sampleRate || 44100);
+                return encodeWavFromFloat(normalized, audioBuffer.sampleRate || 44100);
+            }
+
+            async function testBrowserMic() {
+                const selectedBrowserMic = browserMicSelect.value;
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        deviceId: selectedBrowserMic ? { exact: selectedBrowserMic } : undefined,
+                        channelCount: 1,
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true,
+                    },
+                });
+
+                const AudioContextRef = window.AudioContext || window.webkitAudioContext;
+                const audioCtx = new AudioContextRef();
+                const source = audioCtx.createMediaStreamSource(stream);
+                const analyser = audioCtx.createAnalyser();
+                analyser.fftSize = 2048;
+                source.connect(analyser);
+                const buf = new Float32Array(analyser.fftSize);
+
+                const startedAt = Date.now();
+                const testMs = 1400;
+                let maxPeak = 0;
+                let maxRms = 0;
+
+                await new Promise(function (resolve) {
+                    function tick() {
+                        analyser.getFloatTimeDomainData(buf);
+                        let sum = 0;
+                        let peak = 0;
+                        for (let i = 0; i < buf.length; i += 1) {
+                            const v = Math.abs(buf[i]);
+                            if (v > peak) {
+                                peak = v;
+                            }
+                            sum += buf[i] * buf[i];
+                        }
+                        const rms = Math.sqrt(sum / buf.length);
+                        maxPeak = Math.max(maxPeak, peak);
+                        maxRms = Math.max(maxRms, rms);
+                        if (Date.now() - startedAt >= testMs) {
+                            resolve();
+                        } else {
+                            requestAnimationFrame(tick);
+                        }
+                    }
+                    requestAnimationFrame(tick);
+                });
+
+                stream.getTracks().forEach(function (track) { track.stop(); });
+                await audioCtx.close();
+
+                if (maxPeak < 0.0025 || maxRms < 0.0008) {
+                    throw new Error(
+                        'Selected browser mic has very low/no signal. ' +
+                        '(peak=' + maxPeak.toFixed(4) + ', rms=' + maxRms.toFixed(4) + ')'
+                    );
+                }
+                return (
+                    'Browser microphone test passed ' +
+                    '(peak=' + maxPeak.toFixed(4) + ', rms=' + maxRms.toFixed(4) + ').'
+                );
+            }
+
+            async function testServerMic() {
+                const form = new FormData();
+                form.append('mode', 'server');
+                if (serverMicSelect.value) {
+                    form.append('device_id', serverMicSelect.value);
+                }
+
+                let res;
+                try {
+                    res = await fetch('{{ url_for("test_mic_route") }}', {
+                        method: 'POST',
+                        body: form,
+                    });
+                } catch (_networkErr) {
+                    throw new Error('Cannot reach server for microphone test.');
+                }
+
+                let data = null;
+                try {
+                    data = await res.json();
+                } catch (_parseErr) {
+                    throw new Error('Invalid response from server microphone test.');
+                }
+                if (!res.ok || !data.ok) {
+                    throw new Error(data.error || ('Server mic test failed (HTTP ' + res.status + ').'));
+                }
+                return data.message || 'Server microphone test passed.';
             }
 
             async function uploadBrowserWav(blob) {
                 const form = new FormData();
                 form.append('audio', new File([blob], 'sender.wav', { type: 'audio/wav' }));
-                const res = await fetch('{{ url_for("upload_sender_audio_route") }}', {
-                    method: 'POST',
-                    body: form,
-                });
-                const data = await res.json();
+                let res;
+                try {
+                    res = await fetch('{{ url_for("upload_sender_audio_route") }}', {
+                        method: 'POST',
+                        body: form,
+                    });
+                } catch (_networkErr) {
+                    throw new Error('Cannot reach server. Refresh page and ensure Flask is running.');
+                }
+
+                let data = null;
+                try {
+                    data = await res.json();
+                } catch (_parseErr) {
+                    throw new Error('Server returned an invalid response during browser upload.');
+                }
                 if (!res.ok || !data.ok) {
-                    throw new Error(data.error || 'Browser upload failed.');
+                    throw new Error(data.error || ('Browser upload failed (HTTP ' + res.status + ').'));
                 }
                 return data;
             }
@@ -222,13 +548,27 @@
             async function recordOnServer(duration) {
                 const form = new FormData();
                 form.append('duration', String(duration));
-                const res = await fetch('{{ url_for("record_route") }}', {
-                    method: 'POST',
-                    body: form,
-                });
-                const data = await res.json();
+                if (serverMicSelect.value) {
+                    form.append('device_id', serverMicSelect.value);
+                }
+                let res;
+                try {
+                    res = await fetch('{{ url_for("record_route") }}', {
+                        method: 'POST',
+                        body: form,
+                    });
+                } catch (_networkErr) {
+                    throw new Error('Cannot reach server. Refresh page and ensure Flask is running.');
+                }
+
+                let data = null;
+                try {
+                    data = await res.json();
+                } catch (_parseErr) {
+                    throw new Error('Server returned an invalid response during server recording.');
+                }
                 if (!res.ok || !data.ok) {
-                    throw new Error(data.error || 'Server recording failed.');
+                    throw new Error(data.error || ('Server recording failed (HTTP ' + res.status + ').'));
                 }
                 return data;
             }
@@ -236,8 +576,13 @@
             async function handleRecord() {
                 const duration = Math.max(1, Math.min(10, parseInt(durationInput.value || '3', 10)));
                 const mode = modeSelect.value;
+                const key = currentMicKey();
+                if (lastPassedTest !== key) {
+                    setStatus('error', 'Please test the selected microphone first using "Test Selected Mic".');
+                    return;
+                }
                 setLoading(true);
-                setStatus('info', 'Recording for ' + duration + 's using ' + mode + ' mode...');
+                startCountdown(duration, mode);
 
                 try {
                     let data;
@@ -263,6 +608,7 @@
                 } catch (err) {
                     setStatus('error', err.message || String(err));
                 } finally {
+                    clearCountdown();
                     setLoading(false);
                 }
             }
@@ -276,6 +622,65 @@
                 modeSelect.value = 'server';
                 await handleRecord();
             });
+
+            testMicBtn.addEventListener('click', async function () {
+                setLoading(true);
+                setStatus('info', 'Testing selected microphone...');
+                try {
+                    let msg;
+                    if (modeSelect.value === 'server') {
+                        msg = await testServerMic();
+                    } else {
+                        msg = await testBrowserMic();
+                    }
+                    lastPassedTest = currentMicKey();
+                    setStatus('success', msg);
+                } catch (err) {
+                    lastPassedTest = null;
+                    setStatus('error', err.message || String(err));
+                } finally {
+                    setLoading(false);
+                }
+            });
+
+            // Populate device dropdowns once at load.
+            loadServerDevices();
+            loadBrowserDevices().catch(function () {
+                // Browser may hide labels until permission is granted.
+            });
+
+            // After first permission grant, labels become available; refresh list.
+            if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                navigator.mediaDevices.getUserMedia({ audio: true })
+                    .then(function (s) {
+                        s.getTracks().forEach(function (t) { t.stop(); });
+                        return loadBrowserDevices();
+                    })
+                    .catch(function () {
+                        // Ignore permission denial here; recording flow handles it.
+                    });
+            }
+
+            // Refresh detected devices when user focuses mic dropdowns.
+            browserMicSelect.addEventListener('focus', function () {
+                loadBrowserDevices().catch(function () {});
+            });
+            serverMicSelect.addEventListener('focus', function () {
+                loadServerDevices();
+            });
+            modeSelect.addEventListener('change', function () {
+                syncModeDependentMicUI();
+                invalidateMicTest(true);
+            });
+            browserMicSelect.addEventListener('change', function () {
+                invalidateMicTest(true);
+            });
+            serverMicSelect.addEventListener('change', function () {
+                invalidateMicTest(true);
+            });
+
+            // Initial mode-aware mic control visibility.
+            syncModeDependentMicUI();
         })();
     </script>
 </body>
