@@ -254,6 +254,33 @@ textarea { resize: vertical; }
     border-color: rgba(255, 114, 131, 0.34);
 }
 
+.webauthn-panel {
+    margin: 6px 0 18px;
+    padding: 14px;
+    border-radius: 12px;
+    border: 1px solid rgba(168, 186, 230, 0.16);
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.webauthn-panel h2 {
+    margin: 0 0 8px;
+    font-size: 16px;
+}
+
+.checkbox-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-dim);
+    font-size: 13px;
+}
+
+.checkbox-row input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--accent-strong);
+}
+
 .result {
     margin-top: 20px;
     padding: 16px;

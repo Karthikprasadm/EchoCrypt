@@ -3,3 +3,4 @@ numpy>=1.26
 scipy>=1.13
 sounddevice>=0.4.7
 pycryptodome>=3.20
+webauthn>=2.0.0
