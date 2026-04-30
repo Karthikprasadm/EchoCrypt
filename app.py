@@ -14,7 +14,9 @@ import base64
 import json
 import os
 import secrets
+import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from flask import (
@@ -73,6 +75,7 @@ ALLOWED_UPLOAD_EXTS = {".wav"}
 FINGERPRINT_PASSWORD = "1234"  # simulated fingerprint per spec
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB safety cap
 WEBAUTHN_CREDENTIAL_STORE = BASE_DIR / "webauthn_credentials.json"
+WEBAUTHN_CREDENTIAL_LOCK = BASE_DIR / "webauthn_credentials.lock"
 WEBAUTHN_RP_NAME = "EchoCrypt Receiver"
 WEBAUTHN_RP_ID = os.environ.get("WEBAUTHN_RP_ID", "localhost")
 WEBAUTHN_RP_ORIGIN = os.environ.get("WEBAUTHN_RP_ORIGIN", "http://localhost:5000")
@@ -80,6 +83,7 @@ WEBAUTHN_USER_ID = b"echocrypt-demo-user"
 WEBAUTHN_USER_NAME = "receiver"
 WEBAUTHN_USER_DISPLAY_NAME = "EchoCrypt Receiver User"
 WEBAUTHN_SESSION_TTL_SECONDS = 5 * 60
+_WEBAUTHN_THREAD_LOCK = threading.RLock()
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
@@ -99,7 +103,37 @@ def _b64url_decode(data: str) -> bytes:
     return base64.urlsafe_b64decode(padded.encode("ascii"))
 
 
-def _load_webauthn_store() -> dict:
+@contextmanager
+def _webauthn_store_lock():
+    """Cross-process lock for WebAuthn credential store updates."""
+    # In-process lock avoids Windows msvcrt thread deadlock behavior.
+    with _WEBAUTHN_THREAD_LOCK:
+        WEBAUTHN_CREDENTIAL_LOCK.parent.mkdir(parents=True, exist_ok=True)
+        with open(WEBAUTHN_CREDENTIAL_LOCK, "a+b") as lock_file:
+            if os.name == "nt":
+                import msvcrt  # pylint: disable=import-outside-toplevel
+
+                lock_file.seek(0)
+                lock_file.write(b"0")
+                lock_file.flush()
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+                try:
+                    yield
+                finally:
+                    lock_file.seek(0)
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl  # pylint: disable=import-outside-toplevel
+
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _load_webauthn_store_unlocked() -> dict:
     if not WEBAUTHN_CREDENTIAL_STORE.exists():
         return {"credentials": []}
     try:
@@ -114,11 +148,21 @@ def _load_webauthn_store() -> dict:
     return {"credentials": creds}
 
 
-def _save_webauthn_store(store: dict) -> None:
+def _save_webauthn_store_unlocked(store: dict) -> None:
     WEBAUTHN_CREDENTIAL_STORE.write_text(
         json.dumps(store, indent=2),
         encoding="utf-8",
     )
+
+
+def _load_webauthn_store() -> dict:
+    with _webauthn_store_lock():
+        return _load_webauthn_store_unlocked()
+
+
+def _save_webauthn_store(store: dict) -> None:
+    with _webauthn_store_lock():
+        _save_webauthn_store_unlocked(store)
 
 
 def _credential_descriptors() -> list[PublicKeyCredentialDescriptor]:
@@ -157,6 +201,42 @@ def _upsert_credential(record: dict) -> None:
 
 def _clear_webauthn_credentials() -> None:
     _save_webauthn_store({"credentials": []})
+
+
+def _verify_and_update_sign_count_atomic(
+    credential: AuthenticationCredential,
+    expected_challenge: bytes,
+) -> tuple[dict | None, str | None]:
+    """Atomically verify assertion and persist updated sign_count."""
+    credential_id_b64 = _b64url_encode(credential.raw_id)
+    with _webauthn_store_lock():
+        store = _load_webauthn_store_unlocked()
+        target_idx = None
+        for idx, cred in enumerate(store["credentials"]):
+            if cred.get("credential_id") == credential_id_b64:
+                target_idx = idx
+                break
+        if target_idx is None:
+            return None, "Credential not recognized."
+
+        stored = store["credentials"][target_idx]
+        try:
+            verification = verify_authentication_response(
+                credential=credential,
+                expected_challenge=expected_challenge,
+                expected_rp_id=WEBAUTHN_RP_ID,
+                expected_origin=WEBAUTHN_RP_ORIGIN,
+                credential_public_key=_b64url_decode(stored["public_key"]),
+                credential_current_sign_count=int(stored.get("sign_count", 0)),
+                require_user_verification=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return None, f"Biometric verification failed: {exc}"
+
+        stored["sign_count"] = int(verification.new_sign_count)
+        store["credentials"][target_idx] = stored
+        _save_webauthn_store_unlocked(store)
+        return stored, None
 
 
 def _set_webauthn_challenge(challenge: bytes, challenge_type: str) -> None:
@@ -392,26 +472,12 @@ def webauthn_auth_verify_route():
     except Exception as exc:  # noqa: BLE001
         return jsonify({"ok": False, "error": f"Invalid authentication payload: {exc}"}), 400
 
-    credential_id = credential.raw_id
-    stored = _find_credential_by_id(credential_id)
-    if not stored:
-        return jsonify({"ok": False, "error": "Credential not recognized."}), 400
-
-    try:
-        verification = verify_authentication_response(
-            credential=credential,
-            expected_challenge=expected_challenge,
-            expected_rp_id=WEBAUTHN_RP_ID,
-            expected_origin=WEBAUTHN_RP_ORIGIN,
-            credential_public_key=_b64url_decode(stored["public_key"]),
-            credential_current_sign_count=int(stored.get("sign_count", 0)),
-            require_user_verification=True,
-        )
-    except Exception as exc:  # noqa: BLE001
-        return jsonify({"ok": False, "error": f"Biometric verification failed: {exc}"}), 400
-
-    stored["sign_count"] = int(verification.new_sign_count)
-    _upsert_credential(stored)
+    _stored, err = _verify_and_update_sign_count_atomic(
+        credential=credential,
+        expected_challenge=expected_challenge,
+    )
+    if err:
+        return jsonify({"ok": False, "error": err}), 400
     _mark_biometric_verified()
     return jsonify({"ok": True, "message": "Biometric verification successful."})
 
