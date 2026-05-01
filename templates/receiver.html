@@ -110,6 +110,9 @@
             }
 
             function base64urlToBuffer(base64url) {
+                if (!base64url || typeof base64url !== 'string') {
+                    throw new Error('Invalid WebAuthn binary field from server.');
+                }
                 const pad = '='.repeat((4 - (base64url.length % 4)) % 4);
                 const base64 = (base64url + pad).replace(/-/g, '+').replace(/_/g, '/');
                 const binary = atob(base64);
@@ -176,7 +179,13 @@
                 }
                 setStatus('info', 'Preparing biometric registration...');
                 const optsData = await apiPostJson('{{ url_for("webauthn_register_options_route") }}', {});
-                const publicKey = decodePublicKeyCredentialCreationOptions(optsData.options.publicKey);
+                const creationOptions = (
+                    optsData.options && optsData.options.publicKey
+                ) ? optsData.options.publicKey : optsData.options;
+                if (!creationOptions) {
+                    throw new Error('Server did not return valid registration options.');
+                }
+                const publicKey = decodePublicKeyCredentialCreationOptions(creationOptions);
                 const credential = await navigator.credentials.create({ publicKey: publicKey });
                 if (!credential) {
                     throw new Error('Biometric registration was cancelled.');
@@ -202,7 +211,13 @@
                 }
                 setStatus('info', 'Requesting device biometric verification...');
                 const optsData = await apiPostJson('{{ url_for("webauthn_auth_options_route") }}', {});
-                const publicKey = decodePublicKeyCredentialRequestOptions(optsData.options.publicKey);
+                const requestOptions = (
+                    optsData.options && optsData.options.publicKey
+                ) ? optsData.options.publicKey : optsData.options;
+                if (!requestOptions) {
+                    throw new Error('Server did not return valid authentication options.');
+                }
+                const publicKey = decodePublicKeyCredentialRequestOptions(requestOptions);
                 const assertion = await navigator.credentials.get({ publicKey: publicKey });
                 if (!assertion) {
                     throw new Error('Biometric verification was cancelled.');
