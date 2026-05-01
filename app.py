@@ -123,6 +123,18 @@ def _b64url_decode(data: str) -> bytes:
     return base64.urlsafe_b64decode(padded.encode("ascii"))
 
 
+def _required_b64url_field(data: dict, field_name: str) -> bytes:
+    """Decode a required base64url field, rejecting null/missing values."""
+    value = data.get(field_name)
+    if value is None:
+        raise ValueError(f"Missing required field: {field_name}")
+    if not isinstance(value, str):
+        raise ValueError(f"Invalid field type for {field_name}; expected string")
+    if not value:
+        raise ValueError(f"Empty required field: {field_name}")
+    return _b64url_decode(value)
+
+
 def _parse_transport_values(values: list[str] | None) -> list[AuthenticatorTransport] | None:
     if not values:
         return None
@@ -139,10 +151,10 @@ def _registration_credential_from_payload(payload: dict) -> RegistrationCredenti
     response = payload.get("response") or {}
     return RegistrationCredential(
         id=str(payload.get("id", "")),
-        raw_id=_b64url_decode(str(payload.get("rawId", ""))),
+        raw_id=_required_b64url_field(payload, "rawId"),
         response=AuthenticatorAttestationResponse(
-            client_data_json=_b64url_decode(str(response.get("clientDataJSON", ""))),
-            attestation_object=_b64url_decode(str(response.get("attestationObject", ""))),
+            client_data_json=_required_b64url_field(response, "clientDataJSON"),
+            attestation_object=_required_b64url_field(response, "attestationObject"),
             transports=_parse_transport_values(response.get("transports")),
         ),
     )
@@ -154,11 +166,11 @@ def _authentication_credential_from_payload(payload: dict) -> AuthenticationCred
     user_handle = _b64url_decode(str(user_handle_raw)) if user_handle_raw else None
     return AuthenticationCredential(
         id=str(payload.get("id", "")),
-        raw_id=_b64url_decode(str(payload.get("rawId", ""))),
+        raw_id=_required_b64url_field(payload, "rawId"),
         response=AuthenticatorAssertionResponse(
-            client_data_json=_b64url_decode(str(response.get("clientDataJSON", ""))),
-            authenticator_data=_b64url_decode(str(response.get("authenticatorData", ""))),
-            signature=_b64url_decode(str(response.get("signature", ""))),
+            client_data_json=_required_b64url_field(response, "clientDataJSON"),
+            authenticator_data=_required_b64url_field(response, "authenticatorData"),
+            signature=_required_b64url_field(response, "signature"),
             user_handle=user_handle,
         ),
     )
