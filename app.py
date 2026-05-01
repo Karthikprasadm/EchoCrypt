@@ -44,6 +44,9 @@ from webauthn import (
     verify_registration_response,
 )
 from webauthn.helpers.structs import (
+    AuthenticatorAssertionResponse,
+    AuthenticatorAttestationResponse,
+    AuthenticatorTransport,
     AuthenticationCredential,
     AuthenticatorSelectionCriteria,
     PublicKeyCredentialDescriptor,
@@ -118,6 +121,47 @@ def _b64url_encode(data: bytes) -> str:
 def _b64url_decode(data: str) -> bytes:
     padded = data + "=" * ((4 - len(data) % 4) % 4)
     return base64.urlsafe_b64decode(padded.encode("ascii"))
+
+
+def _parse_transport_values(values: list[str] | None) -> list[AuthenticatorTransport] | None:
+    if not values:
+        return None
+    parsed: list[AuthenticatorTransport] = []
+    for item in values:
+        try:
+            parsed.append(AuthenticatorTransport(item))
+        except Exception:
+            continue
+    return parsed or None
+
+
+def _registration_credential_from_payload(payload: dict) -> RegistrationCredential:
+    response = payload.get("response") or {}
+    return RegistrationCredential(
+        id=str(payload.get("id", "")),
+        raw_id=_b64url_decode(str(payload.get("rawId", ""))),
+        response=AuthenticatorAttestationResponse(
+            client_data_json=_b64url_decode(str(response.get("clientDataJSON", ""))),
+            attestation_object=_b64url_decode(str(response.get("attestationObject", ""))),
+            transports=_parse_transport_values(response.get("transports")),
+        ),
+    )
+
+
+def _authentication_credential_from_payload(payload: dict) -> AuthenticationCredential:
+    response = payload.get("response") or {}
+    user_handle_raw = response.get("userHandle")
+    user_handle = _b64url_decode(str(user_handle_raw)) if user_handle_raw else None
+    return AuthenticationCredential(
+        id=str(payload.get("id", "")),
+        raw_id=_b64url_decode(str(payload.get("rawId", ""))),
+        response=AuthenticatorAssertionResponse(
+            client_data_json=_b64url_decode(str(response.get("clientDataJSON", ""))),
+            authenticator_data=_b64url_decode(str(response.get("authenticatorData", ""))),
+            signature=_b64url_decode(str(response.get("signature", ""))),
+            user_handle=user_handle,
+        ),
+    )
 
 
 @contextmanager
@@ -444,7 +488,7 @@ def webauthn_register_verify_route():
     payload = request.get_json(silent=True) or {}
     rp_id, rp_origin = _effective_webauthn_rp()
     try:
-        credential = RegistrationCredential.parse_raw(json.dumps(payload))
+        credential = _registration_credential_from_payload(payload)
         verification = verify_registration_response(
             credential=credential,
             expected_challenge=expected_challenge,
@@ -490,7 +534,7 @@ def webauthn_auth_verify_route():
 
     payload = request.get_json(silent=True) or {}
     try:
-        credential = AuthenticationCredential.parse_raw(json.dumps(payload))
+        credential = _authentication_credential_from_payload(payload)
     except Exception as exc:  # noqa: BLE001
         return jsonify({"ok": False, "error": f"Invalid authentication payload: {exc}"}), 400
 
