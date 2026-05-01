@@ -22,6 +22,7 @@ from pathlib import Path
 from flask import (
     Flask,
     flash,
+    has_request_context,
     jsonify,
     redirect,
     render_template,
@@ -77,8 +78,8 @@ MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB safety cap
 WEBAUTHN_CREDENTIAL_STORE = BASE_DIR / "webauthn_credentials.json"
 WEBAUTHN_CREDENTIAL_LOCK = BASE_DIR / "webauthn_credentials.lock"
 WEBAUTHN_RP_NAME = "EchoCrypt Receiver"
-WEBAUTHN_RP_ID = os.environ.get("WEBAUTHN_RP_ID", "localhost")
-WEBAUTHN_RP_ORIGIN = os.environ.get("WEBAUTHN_RP_ORIGIN", "http://localhost:5000")
+WEBAUTHN_RP_ID = os.environ.get("WEBAUTHN_RP_ID")
+WEBAUTHN_RP_ORIGIN = os.environ.get("WEBAUTHN_RP_ORIGIN")
 WEBAUTHN_USER_ID = b"echocrypt-demo-user"
 WEBAUTHN_USER_NAME = "receiver"
 WEBAUTHN_USER_DISPLAY_NAME = "EchoCrypt Receiver User"
@@ -89,9 +90,25 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 app.secret_key = "echocrypt-demo-secret-key"  # only used for flash messages
 
+# WebAuthn state files must be writable on serverless platforms.
+WEBAUTHN_CREDENTIAL_STORE = UPLOADS_DIR / "webauthn_credentials.json"
+WEBAUTHN_CREDENTIAL_LOCK = UPLOADS_DIR / "webauthn_credentials.lock"
+
 
 def _uploads_path(name: str) -> Path:
     return UPLOADS_DIR / name
+
+
+def _effective_webauthn_rp() -> tuple[str, str]:
+    """Resolve RP ID/origin from env or current request host."""
+    if WEBAUTHN_RP_ID and WEBAUTHN_RP_ORIGIN:
+        return WEBAUTHN_RP_ID, WEBAUTHN_RP_ORIGIN
+    if has_request_context():
+        host = request.host.split(":", 1)[0]
+        if host in {"127.0.0.1", "::1"}:
+            host = "localhost"
+        return host, request.host_url.rstrip("/")
+    return "localhost", "http://localhost:5000"
 
 
 def _b64url_encode(data: bytes) -> str:
@@ -208,6 +225,7 @@ def _verify_and_update_sign_count_atomic(
     expected_challenge: bytes,
 ) -> tuple[dict | None, str | None]:
     """Atomically verify assertion and persist updated sign_count."""
+    rp_id, rp_origin = _effective_webauthn_rp()
     credential_id_b64 = _b64url_encode(credential.raw_id)
     with _webauthn_store_lock():
         store = _load_webauthn_store_unlocked()
@@ -224,8 +242,8 @@ def _verify_and_update_sign_count_atomic(
             verification = verify_authentication_response(
                 credential=credential,
                 expected_challenge=expected_challenge,
-                expected_rp_id=WEBAUTHN_RP_ID,
-                expected_origin=WEBAUTHN_RP_ORIGIN,
+                expected_rp_id=rp_id,
+                expected_origin=rp_origin,
                 credential_public_key=_b64url_decode(stored["public_key"]),
                 credential_current_sign_count=int(stored.get("sign_count", 0)),
                 require_user_verification=True,
@@ -295,11 +313,12 @@ def sender_page():
 @app.route("/receiver", methods=["GET"])
 def receiver_page():
     has_registered_credential = bool(_load_webauthn_store()["credentials"])
+    rp_id, _rp_origin = _effective_webauthn_rp()
     return render_template(
         "receiver.html",
         has_registered_credential=has_registered_credential,
         biometric_recently_verified=_has_recent_biometric_verification(),
-        rp_id=WEBAUTHN_RP_ID,
+        rp_id=rp_id,
     )
 
 
@@ -398,8 +417,9 @@ def test_mic_route():
 @app.route("/webauthn/register/options", methods=["POST"])
 def webauthn_register_options_route():
     """Issue WebAuthn registration options for platform authenticator."""
+    rp_id, _rp_origin = _effective_webauthn_rp()
     options = generate_registration_options(
-        rp_id=WEBAUTHN_RP_ID,
+        rp_id=rp_id,
         rp_name=WEBAUTHN_RP_NAME,
         user_id=WEBAUTHN_USER_ID,
         user_name=WEBAUTHN_USER_NAME,
@@ -422,13 +442,14 @@ def webauthn_register_verify_route():
         return jsonify({"ok": False, "error": "Registration challenge missing/expired."}), 400
 
     payload = request.get_json(silent=True) or {}
+    rp_id, rp_origin = _effective_webauthn_rp()
     try:
         credential = RegistrationCredential.parse_raw(json.dumps(payload))
         verification = verify_registration_response(
             credential=credential,
             expected_challenge=expected_challenge,
-            expected_rp_id=WEBAUTHN_RP_ID,
-            expected_origin=WEBAUTHN_RP_ORIGIN,
+            expected_rp_id=rp_id,
+            expected_origin=rp_origin,
             require_user_verification=True,
         )
     except Exception as exc:  # noqa: BLE001
@@ -450,8 +471,9 @@ def webauthn_auth_options_route():
     if not allow_credentials:
         return jsonify({"ok": False, "error": "No registered biometric credential found."}), 400
 
+    rp_id, _rp_origin = _effective_webauthn_rp()
     options = generate_authentication_options(
-        rp_id=WEBAUTHN_RP_ID,
+        rp_id=rp_id,
         allow_credentials=allow_credentials,
         user_verification=UserVerificationRequirement.REQUIRED,
     )
@@ -583,6 +605,7 @@ def encrypt_embed_route():
 @app.route("/upload_decrypt", methods=["POST"])
 def upload_decrypt_route():
     """Authenticate, extract LSB payload, decrypt, and display the message."""
+    rp_id, _rp_origin = _effective_webauthn_rp()
     password = (request.form.get("password") or "").strip()
     biometric_only = (request.form.get("biometric_only") or "").strip() in {"1", "true", "on"}
     password_ok = password == FINGERPRINT_PASSWORD
@@ -604,7 +627,7 @@ def upload_decrypt_route():
             access_denied=True,
             has_registered_credential=bool(_load_webauthn_store()["credentials"]),
             biometric_recently_verified=biometric_ok,
-            rp_id=WEBAUTHN_RP_ID,
+            rp_id=rp_id,
             biometric_only=biometric_only,
         )
 
@@ -615,7 +638,7 @@ def upload_decrypt_route():
             error="Please choose a WAV file to decrypt.",
             has_registered_credential=bool(_load_webauthn_store()["credentials"]),
             biometric_recently_verified=biometric_ok,
-            rp_id=WEBAUTHN_RP_ID,
+            rp_id=rp_id,
             biometric_only=biometric_only,
         )
 
@@ -627,7 +650,7 @@ def upload_decrypt_route():
             error="Only .wav files are supported.",
             has_registered_credential=bool(_load_webauthn_store()["credentials"]),
             biometric_recently_verified=biometric_ok,
-            rp_id=WEBAUTHN_RP_ID,
+            rp_id=rp_id,
             biometric_only=biometric_only,
         )
 
@@ -640,7 +663,7 @@ def upload_decrypt_route():
             error=f"Could not save uploaded file: {exc}",
             has_registered_credential=bool(_load_webauthn_store()["credentials"]),
             biometric_recently_verified=biometric_ok,
-            rp_id=WEBAUTHN_RP_ID,
+            rp_id=rp_id,
             biometric_only=biometric_only,
         )
 
@@ -652,7 +675,7 @@ def upload_decrypt_route():
             error=f"Could not read audio: {exc}",
             has_registered_credential=bool(_load_webauthn_store()["credentials"]),
             biometric_recently_verified=biometric_ok,
-            rp_id=WEBAUTHN_RP_ID,
+            rp_id=rp_id,
             biometric_only=biometric_only,
         )
 
@@ -664,7 +687,7 @@ def upload_decrypt_route():
             error=f"Extraction failed: {exc}",
             has_registered_credential=bool(_load_webauthn_store()["credentials"]),
             biometric_recently_verified=biometric_ok,
-            rp_id=WEBAUTHN_RP_ID,
+            rp_id=rp_id,
             biometric_only=biometric_only,
         )
 
@@ -676,7 +699,7 @@ def upload_decrypt_route():
             error=f"Decryption failed: {exc}",
             has_registered_credential=bool(_load_webauthn_store()["credentials"]),
             biometric_recently_verified=biometric_ok,
-            rp_id=WEBAUTHN_RP_ID,
+            rp_id=rp_id,
             biometric_only=biometric_only,
         )
 
@@ -686,7 +709,7 @@ def upload_decrypt_route():
         success=True,
         has_registered_credential=bool(_load_webauthn_store()["credentials"]),
         biometric_recently_verified=biometric_ok,
-        rp_id=WEBAUTHN_RP_ID,
+        rp_id=rp_id,
         biometric_only=biometric_only,
     )
 
