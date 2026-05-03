@@ -233,6 +233,13 @@ textarea { resize: vertical; }
 .hidden { display: none; }
 .muted { color: var(--text-dim); margin: 4px 0; font-size: 13px; }
 
+.mic-hint {
+    margin: 2px 0 0;
+    font-size: 12px;
+    line-height: 1.45;
+    max-width: 42rem;
+}
+
 .flashes { display: grid; gap: 8px; margin-bottom: 16px; }
 
 .flash {

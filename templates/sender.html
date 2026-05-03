@@ -58,6 +58,7 @@
                         <button id="record-server-btn" class="btn ghost" type="button">Record on Server</button>
                         <button id="test-mic-btn" class="btn ghost" type="button">Test Selected Mic</button>
                     </div>
+                    <p id="mic-hint" class="muted mic-hint hidden"></p>
                 </div>
                 <p id="record-status" class="status" role="status" aria-live="polite"></p>
                 <div id="record-preview" class="preview hidden">
@@ -105,6 +106,7 @@
             const serverMicSelect = document.getElementById('server-mic');
             const browserMicField = document.getElementById('browser-mic-field');
             const serverMicField = document.getElementById('server-mic-field');
+            const micHint = document.getElementById('mic-hint');
             let localPreviewUrl = null;
             let countdownTimerId = null;
             let lastPassedTest = null;
@@ -122,6 +124,117 @@
             function setStatus(kind, message) {
                 status.textContent = message;
                 status.className = 'status ' + kind;
+            }
+
+            function isSecureMicContext() {
+                if (typeof window.isSecureContext !== 'undefined') {
+                    return window.isSecureContext;
+                }
+                const p = String(window.location.protocol || '').toLowerCase();
+                return p === 'https:' || p === 'file:' || /^localhost$|^127\./i.test(window.location.hostname || '');
+            }
+
+            function describeMicError(err) {
+                const name = err && err.name ? String(err.name) : '';
+                const msg = err && err.message ? String(err.message) : String(err || '');
+                if (name === 'NotAllowedError' || /permission denied/i.test(msg)) {
+                    return (
+                        'Microphone access was blocked. Tap Test again and choose Allow, or open your browser ' +
+                        'menu → Site settings → Microphone → Allow for this site, then reload the page.'
+                    );
+                }
+                if (name === 'NotFoundError') {
+                    return (
+                        'No microphone matched this device. Try another mic in the list, or pick ' +
+                        '"Browser microphone 1" after allowing access once.'
+                    );
+                }
+                if (name === 'NotReadableError' || name === 'AbortError') {
+                    return (
+                        'Microphone is in use or unavailable. Close other apps using the mic and try again.'
+                    );
+                }
+                if (name === 'OverconstrainedError') {
+                    return (
+                        'This browser cannot use the requested mic settings. Try another mic or update the browser.'
+                    );
+                }
+                if (name === 'SecurityError' || /secure context/i.test(msg)) {
+                    return (
+                        'Microphone needs HTTPS (or localhost). Open the site over HTTPS and try again.'
+                    );
+                }
+                return msg || name || 'Microphone error.';
+            }
+
+            /**
+             * Mobile browsers often reject strict deviceId (exact) or sampleRate constraints.
+             * Try relaxed constraints, then fall back to default mic.
+             */
+            async function openBrowserMicStream(preferredDeviceId) {
+                if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                    throw new Error('Microphone is not supported in this browser.');
+                }
+                if (!isSecureMicContext()) {
+                    throw new Error(
+                        'Microphone requires a secure context (HTTPS). Use https:// on your phone or localhost on a PC.'
+                    );
+                }
+
+                const attempts = [];
+
+                if (preferredDeviceId) {
+                    attempts.push({
+                        audio: {
+                            deviceId: { ideal: preferredDeviceId },
+                            echoCancellation: true,
+                            noiseSuppression: true,
+                            autoGainControl: true,
+                        },
+                    });
+                    attempts.push({
+                        audio: {
+                            deviceId: { exact: preferredDeviceId },
+                            echoCancellation: true,
+                            noiseSuppression: true,
+                            autoGainControl: true,
+                        },
+                    });
+                }
+
+                attempts.push({
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true,
+                    },
+                });
+                attempts.push({ audio: true });
+
+                let lastErr = null;
+                for (let i = 0; i < attempts.length; i += 1) {
+                    try {
+                        return await navigator.mediaDevices.getUserMedia(attempts[i]);
+                    } catch (e) {
+                        lastErr = e;
+                    }
+                }
+                throw lastErr || new Error('Could not open microphone.');
+            }
+
+            function showMicSecureHint() {
+                if (!micHint) {
+                    return;
+                }
+                if (!isSecureMicContext()) {
+                    micHint.textContent =
+                        'Microphone works only on HTTPS or localhost. Use your HTTPS deployment URL.';
+                    micHint.classList.remove('hidden');
+                    return;
+                }
+                micHint.textContent =
+                    'On your phone: allow the mic when prompted. If you tapped Block earlier, use the site menu → Microphone → Allow.';
+                micHint.classList.remove('hidden');
             }
 
             function currentMicKey() {
@@ -368,16 +481,7 @@
                 }
                 const selectedBrowserMic = browserMicSelect.value;
 
-                const stream = await navigator.mediaDevices.getUserMedia({
-                    audio: {
-                        deviceId: selectedBrowserMic ? { exact: selectedBrowserMic } : undefined,
-                        channelCount: 1,
-                        sampleRate: 44100,
-                        echoCancellation: true,
-                        noiseSuppression: true,
-                        autoGainControl: true,
-                    },
-                });
+                const stream = await openBrowserMicStream(selectedBrowserMic || null);
                 const chunks = [];
                 const recorder = new MediaRecorder(stream);
 
@@ -429,15 +533,7 @@
 
             async function testBrowserMic() {
                 const selectedBrowserMic = browserMicSelect.value;
-                const stream = await navigator.mediaDevices.getUserMedia({
-                    audio: {
-                        deviceId: selectedBrowserMic ? { exact: selectedBrowserMic } : undefined,
-                        channelCount: 1,
-                        echoCancellation: true,
-                        noiseSuppression: true,
-                        autoGainControl: true,
-                    },
-                });
+                const stream = await openBrowserMicStream(selectedBrowserMic || null);
 
                 const AudioContextRef = window.AudioContext || window.webkitAudioContext;
                 const audioCtx = new AudioContextRef();
@@ -606,7 +702,7 @@
                     }
                     setStatus('success', data.message || 'Recording complete.');
                 } catch (err) {
-                    setStatus('error', err.message || String(err));
+                    setStatus('error', describeMicError(err));
                 } finally {
                     clearCountdown();
                     setLoading(false);
@@ -632,34 +728,25 @@
                         msg = await testServerMic();
                     } else {
                         msg = await testBrowserMic();
+                        loadBrowserDevices().catch(function () {});
                     }
                     lastPassedTest = currentMicKey();
                     setStatus('success', msg);
                 } catch (err) {
                     lastPassedTest = null;
-                    setStatus('error', err.message || String(err));
+                    setStatus('error', describeMicError(err));
                 } finally {
                     setLoading(false);
                 }
             });
 
-            // Populate device dropdowns once at load.
+            // Populate device dropdowns once at load (do not call getUserMedia here — mobile browsers
+            // require a direct tap; an automatic prompt often leads to denial or confusing state).
             loadServerDevices();
             loadBrowserDevices().catch(function () {
                 // Browser may hide labels until permission is granted.
             });
-
-            // After first permission grant, labels become available; refresh list.
-            if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-                navigator.mediaDevices.getUserMedia({ audio: true })
-                    .then(function (s) {
-                        s.getTracks().forEach(function (t) { t.stop(); });
-                        return loadBrowserDevices();
-                    })
-                    .catch(function () {
-                        // Ignore permission denial here; recording flow handles it.
-                    });
-            }
+            showMicSecureHint();
 
             // Refresh detected devices when user focuses mic dropdowns.
             browserMicSelect.addEventListener('focus', function () {
