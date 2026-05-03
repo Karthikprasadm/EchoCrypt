@@ -240,6 +240,13 @@ textarea { resize: vertical; }
     max-width: 42rem;
 }
 
+.file-input-hint {
+    margin: 6px 0 10px;
+    font-size: 12px;
+    line-height: 1.45;
+    max-width: 42rem;
+}
+
 .flashes { display: grid; gap: 8px; margin-bottom: 16px; }
 
 .flash {

@@ -59,7 +59,12 @@
                   method="post" enctype="multipart/form-data" class="stack">
 
                 <label for="audio">Encoded audio file (.wav)</label>
-                <input id="audio" name="audio" type="file" accept=".wav,audio/wav" required />
+                <p class="muted file-input-hint">
+                    On phones: open your file manager if you see only Recorder or Photos —
+                    pick Downloads or Files, then select encoded.wav (must end in .wav).
+                </p>
+                <!-- accept=*/* so Android shows Documents/Files, not only audio apps (narrow MIME triggers Voice Recorder). -->
+                <input id="audio" name="audio" type="file" accept="*/*" required />
 
                 <label for="password">Fingerprint password</label>
                 <input id="password" name="password" type="password"
