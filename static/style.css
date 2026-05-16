@@ -1,18 +1,18 @@
 :root {
     --bg-0: #080b14;
     --bg-1: #0d1324;
-    --surface: rgba(17, 24, 42, 0.82);
-    --surface-2: rgba(22, 30, 52, 0.78);
-    --text: #eef2ff;
-    --text-dim: #aeb7d5;
+    --surface: #ffffff;
+    --surface-2: #f2f4f8;
+    --text: #0f1115;
+    --text-dim: #4b5565;
     --accent: #8cb9ff;
     --accent-strong: #5e95ff;
     --success: #37d3a2;
     --warning: #ffc165;
     --danger: #ff7283;
-    --border: rgba(168, 186, 230, 0.22);
-    --ring: rgba(140, 185, 255, 0.28);
-    --shadow: 0 18px 54px rgba(5, 9, 24, 0.62);
+    --border: rgba(20, 30, 50, 0.14);
+    --ring: rgba(140, 185, 255, 0.35);
+    --shadow: 0 18px 54px rgba(20, 30, 50, 0.18);
     --radius: 16px;
 }
 
@@ -23,10 +23,7 @@ html, body {
     padding: 0;
     font-family: "Inter", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
     color: var(--text);
-    background:
-        radial-gradient(900px 620px at 8% -10%, rgba(120, 174, 255, 0.16), transparent 62%),
-        radial-gradient(1000px 660px at 104% -8%, rgba(149, 126, 255, 0.12), transparent 62%),
-        linear-gradient(180deg, var(--bg-0), var(--bg-1));
+    background: #f6f7fb;
     min-height: 100vh;
 }
 
@@ -69,7 +66,7 @@ html, body {
     font-size: 38px;
     margin: 0 0 8px;
     letter-spacing: -0.02em;
-    color: #f4f7ff;
+    color: var(--text);
 }
 
 h1 { font-size: 28px; margin: 0 0 6px; letter-spacing: -0.01em; }
@@ -124,11 +121,11 @@ h2 { font-size: 17px; margin: 0 0 12px; }
 
 .btn.ghost {
     color: var(--text);
-    background: rgba(255, 255, 255, 0.02);
+    background: #f3f4f7;
     border-color: var(--border);
 }
 
-.btn.ghost:hover { background: rgba(255, 255, 255, 0.06); }
+.btn.ghost:hover { background: #e8ebf2; }
 
 .steps { padding-left: 18px; line-height: 1.75; color: var(--text-dim); }
 .steps strong { color: var(--text); }
@@ -153,7 +150,7 @@ h2 { font-size: 17px; margin: 0 0 12px; }
     padding: 16px;
     border-radius: 14px;
     border: 1px solid rgba(168, 186, 230, 0.14);
-    background: rgba(255, 255, 255, 0.01);
+    background: #f7f8fc;
 }
 
 .field-wide {
@@ -196,7 +193,7 @@ input[type="number"],
 input[type="file"],
 select,
 textarea {
-    background: rgba(8, 12, 24, 0.55);
+    background: #ffffff;
     color: var(--text);
     border: 1px solid var(--border);
     border-radius: 11px;
@@ -257,15 +254,15 @@ textarea { resize: vertical; }
 }
 
 .flash.success {
-    color: #d9ffed;
-    background: rgba(55, 211, 162, 0.13);
-    border-color: rgba(55, 211, 162, 0.34);
+    color: #135f46;
+    background: #dff5ea;
+    border-color: #a9e1cc;
 }
 
 .flash.error {
-    color: #ffe2e7;
-    background: rgba(255, 114, 131, 0.13);
-    border-color: rgba(255, 114, 131, 0.34);
+    color: #8b1f2b;
+    background: #ffe3e7;
+    border-color: #f1a7b3;
 }
 
 .webauthn-panel {
@@ -273,7 +270,7 @@ textarea { resize: vertical; }
     padding: 14px;
     border-radius: 12px;
     border: 1px solid rgba(168, 186, 230, 0.16);
-    background: rgba(255, 255, 255, 0.02);
+    background: #f7f8fc;
 }
 
 .webauthn-panel h2 {
@@ -323,7 +320,7 @@ textarea { resize: vertical; }
 .success-step audio { width: 100%; margin-top: 8px; }
 
 .message-box {
-    background: rgba(8, 12, 24, 0.62);
+    background: #f2f4f8;
     color: var(--text);
     padding: 12px;
     border-radius: 10px;
